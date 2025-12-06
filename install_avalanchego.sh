@@ -1,45 +1,46 @@
 #!/bin/bash
-# 修复版：自动检测解压目录名
+# AvalancheGo v1.14.0 一键安装脚本 - 终极稳妥版
 set -e
 
 VERSION="v1.14.0"
+TARBALL="avalanchego-linux-amd64-${VERSION}.tar.gz"
 INSTALL_DIR="/root/avalanchego-${VERSION}"
 BIN_DIR="/usr/local/bin"
 SERVICE_NAME="avalanchego"
-TARBALL="avalanchego-linux-amd64-${VERSION}.tar.gz"
 
 echo "============================================================="
-echo "   AvalancheGo ${VERSION} 一键安装（自动检测目录）"
+echo "   AvalancheGo ${VERSION} 一键安装 - 终极稳妥版"
 echo "============================================================="
 
-# 如果 tar.gz 不存在，先下载
-[ ! -f "$TARBALL" ] && wget -q https://github.com/ava-labs/avalanchego/releases/download/${VERSION}/$TARBALL
-
-# 解压
-echo "[1/5] 解压..."
-tar -xzf $TARBALL
-rm -f $TARBALL
-
-# 自动找解压出的目录（兼容 avalanchego-v1.14.0 或 avalanchego-linux-amd64-v1.14.0）
-EXTRACTED_DIR=$(ls -d avalanchego-* 2>/dev/null | head -1)
-if [ -z "$EXTRACTED_DIR" ]; then
-    echo "错误：未找到解压目录！"
-    exit 1
+# 1. 下载（如果已经下了就跳过）
+if [ ! -f "$TARBALL" ]; then
+    echo "[1/6] 正在下载 $TARBALL ..."
+    wget -q https://github.com/ava-labs/avalanchego/releases/download/${VERSION}/${TARBALL}
+else
+    echo "[1/6] 检测到已下载 $TARBALL，跳过下载"
 fi
-echo "检测到目录：$EXTRACTED_DIR"
 
-# 移动
-[ -d "$INSTALL_DIR" ] && rm -rf "$INSTALL_DIR"
+# 2. 先预读压缩包里最顶层的目录名（不解压也能读）
+echo "[2/6] 正在读取压缩包内的目录名..."
+EXTRACTED_DIR=$(tar -tf "$TARBALL" | head -1 | cut -f1 -d"/")
+echo "    → 压缩包内目录为: $EXTRACTED_DIR"
+
+# 3. 解压
+echo "[3/6] 正在解压..."
+tar -xzf "$TARBALL"
+
+# 4. 移动（现在一定找得到）
+echo "[4/6] 移动到 $INSTALL_DIR ..."
+rm -rf "$INSTALL_DIR"
 mv "$EXTRACTED_DIR" "$INSTALL_DIR"
 
-# 安装二进制
-echo "[2/5] 安装二进制..."
-cp "${INSTALL_DIR}/avalanchego" "$BIN_DIR/"
+# 5. 安装二进制
+echo "[5/6] 安装二进制文件..."
+cp "$INSTALL_DIR/avalanchego" "$BIN_DIR/"
 mkdir -p "$BIN_DIR/plugins"
-cp "${INSTALL_DIR}/plugins/"* "$BIN_DIR/plugins/" 2>/dev/null || true
+cp "$INSTALL_DIR/plugins/"* "$BIN_DIR/plugins/" 2>/dev/null || true
 
-# 服务文件
-echo "[3/5] 创建服务..."
+# 6. 创建 systemd 服务并启动
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
 Description=AvalancheGo ${VERSION}
@@ -52,35 +53,34 @@ User=root
 WorkingDirectory=${INSTALL_DIR}
 ExecStart=${BIN_DIR}/avalanchego --http-port=9650
 Restart=always
-RestartSec=5
+RestartSec=3
 LimitNOFILE=65536
-Environment="AVALANCHE_DATA_DIR=/root/.avalanchego"
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable ${SERVICE_NAME}
+systemctl enable --now ${SERVICE_NAME} >/dev/null
 
-# 启动
-echo "[4/5] 启动..."
-systemctl start ${SERVICE_NAME}
-
-# 等待并显示信息
-echo "[5/5] 等待节点就绪..."
+# 7. 等待并显示 NodeID
+echo "等待节点启动（最多 60 秒）..."
 for i in {1..60}; do
     if curl -s 127.0.0.1:9650/ext/info >/dev/null 2>&1; then
-        echo -e "\n✅ 节点启动成功！你的信息："
-        curl -s -X POST --data '{"jsonrpc":"2.0","id":1,"method":"info.getNodeID"}' -H 'content-type:application/json;' 127.0.0.1:9650/ext/info | \
-        python3 -c "import sys,json; r=json.load(sys.stdin)['result']; print(f'NodeID         : {r[\"nodeID\"]}'); print(f'BLS 公钥       : {r[\"nodePOP\"][\"publicKey\"]}'); print(f'BLS 签名(PoP)  : {r[\"nodePOP\"][\"proofOfPossession\"]}')"
-        echo -e "\n📋 常用命令："
-        echo "状态： systemctl status $SERVICE_NAME"
-        echo "日志： journalctl -u $SERVICE_NAME -f"
-        echo "重启： systemctl restart $SERVICE_NAME"
-        echo -e "\n⚠️  备份提醒：/root/.avalanchego （节点身份 + 数据）\n"
+        echo -e "\n节点启动成功！你的节点信息："
+        curl -s -X POST --data '{"jsonrpc":"2.0","id":1,"method":"info.getNodeID"}' \
+             -H 'content-type:application/json;' 127.0.0.1:9650/ext/info | \
+             python3 -c "import sys,json; r=json.load(sys.stdin)['result']; \
+             print('NodeID        :', r['nodeID']); \
+             print('BLS 公钥      :', r['nodePOP']['publicKey']); \
+             print('BLS 签名(PoP) :', r['nodePOP']['proofOfPossession'])"
+        echo -e "\n全部完成！常用命令："
+        echo "journalctl -u avalanchego -f"
+        echo "systemctl restart avalanchego"
+        echo -e "\n重装系统记得备份 /root/.avalanchego\n"
         exit 0
     fi
     sleep 1
-    [ $i -eq 60 ] && echo "❌ 启动超时，检查日志：journalctl -u $SERVICE_NAME"
 done
+
+echo "60 秒内未检测到节点启动，请查看日志：journalctl -u avalanchego -f"
