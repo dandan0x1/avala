@@ -16,7 +16,7 @@ echo "============================================================="
 
 # 1. 下载并解压
 echo "[1/6] 正在下载 avalanchego ${VERSION} ..."
-wget -q https://github.com/ava-labs/avalanchego/releases/download/${VERSION}/avalanchego-linux-amd64-${VERSION}.tar.gz
+wget https://github.com/ava-labs/avalanchego/releases/download/${VERSION}/avalanchego-linux-amd64-${VERSION}.tar.gz
 
 echo "[2/6] 正在解压..."
 tar -xzf avalanchego-linux-amd64-${VERSION}.tar.gz
