@@ -1,86 +1,49 @@
 #!/bin/bash
-# AvalancheGo v1.14.0 一键安装脚本 - 终极稳妥版
 set -e
+
+# 强制回到家目录，防止误操作
+cd /root
 
 VERSION="v1.14.0"
 TARBALL="avalanchego-linux-amd64-${VERSION}.tar.gz"
 INSTALL_DIR="/root/avalanchego-${VERSION}"
 BIN_DIR="/usr/local/bin"
-SERVICE_NAME="avalanchego"
 
-echo "============================================================="
-echo "   AvalancheGo ${VERSION} 一键安装 - 终极稳妥版"
-echo "============================================================="
+echo "开始安装 AvalancheGo ${VERSION}（强制在家目录操作）"
 
-# 1. 下载（如果已经下了就跳过）
-if [ ! -f "$TARBALL" ]; then
-    echo "[1/6] 正在下载 $TARBALL ..."
-    wget -q https://github.com/ava-labs/avalanchego/releases/download/${VERSION}/${TARBALL}
-else
-    echo "[1/6] 检测到已下载 $TARBALL，跳过下载"
-fi
+[ -f "$TARBALL" ] || wget -q https://github.com/ava-labs/avalanchego/releases/download/${VERSION}/${TARBALL}
 
-# 2. 先预读压缩包里最顶层的目录名（不解压也能读）
-echo "[2/6] 正在读取压缩包内的目录名..."
-EXTRACTED_DIR=$(tar -tf "$TARBALL" | head -1 | cut -f1 -d"/")
-echo "    → 压缩包内目录为: $EXTRACTED_DIR"
+echo "读取压缩包内目录名..."
+DIR_IN_TAR=$(tar -tf "$TARBALL" | head -1 | cut -f1 -d"/")
+echo "即将解压出: $DIR_IN_TAR"
 
-# 3. 解压
-echo "[3/6] 正在解压..."
+echo "解压中..."
 tar -xzf "$TARBALL"
 
-# 4. 移动（现在一定找得到）
-echo "[4/6] 移动到 $INSTALL_DIR ..."
+echo "移动 $DIR_IN_TAR → $INSTALL_DIR"
 rm -rf "$INSTALL_DIR"
-mv "$EXTRACTED_DIR" "$INSTALL_DIR"
+mv "$DIR_IN_TAR" "$INSTALL_DIR"
 
-# 5. 安装二进制
-echo "[5/6] 安装二进制文件..."
 cp "$INSTALL_DIR/avalanchego" "$BIN_DIR/"
-mkdir -p "$BIN_DIR/plugins"
-cp "$INSTALL_DIR/plugins/"* "$BIN_DIR/plugins/" 2>/dev/null || true
+mkdir -p "$BIN_DIR/plugins" && cp "$INSTALL_DIR/plugins/"* "$BIN_DIR/plugins/" 2>/dev/null || true
 
-# 6. 创建 systemd 服务并启动
-cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
-[Unit]
-Description=AvalancheGo ${VERSION}
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${INSTALL_DIR}
-ExecStart=${BIN_DIR}/avalanchego --http-port=9650
-Restart=always
-RestartSec=3
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
+cat > /etc/systemd/system/avalanchego.service <<EOF
+[Unit]Description=AvalancheGo ${VERSION} After=network-online.target
+[Service]Type=simple User=root WorkingDirectory=${INSTALL_DIR} ExecStart=${BIN_DIR}/avalanchego --http-port=9650 Restart=always RestartSec=3 LimitNOFILE=65536
+[Install]WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now ${SERVICE_NAME} >/dev/null
+systemctl enable --now avalanchego >/dev/null
 
-# 7. 等待并显示 NodeID
-echo "等待节点启动（最多 60 秒）..."
+echo "等待节点启动..."
 for i in {1..60}; do
+    sleep 1
     if curl -s 127.0.0.1:9650/ext/info >/dev/null 2>&1; then
-        echo -e "\n节点启动成功！你的节点信息："
-        curl -s -X POST --data '{"jsonrpc":"2.0","id":1,"method":"info.getNodeID"}' \
-             -H 'content-type:application/json;' 127.0.0.1:9650/ext/info | \
-             python3 -c "import sys,json; r=json.load(sys.stdin)['result']; \
-             print('NodeID        :', r['nodeID']); \
-             print('BLS 公钥      :', r['nodePOP']['publicKey']); \
-             print('BLS 签名(PoP) :', r['nodePOP']['proofOfPossession'])"
-        echo -e "\n全部完成！常用命令："
-        echo "journalctl -u avalanchego -f"
-        echo "systemctl restart avalanchego"
-        echo -e "\n重装系统记得备份 /root/.avalanchego\n"
+        echo -e "\n节点启动成功！你的信息如下："
+        curl -X POST --data '{"jsonrpc":"2.0","id":1,"method":"info.getNodeID"}' -H 'content-type:application/json;' 127.0.0.1:9650/ext/info
+        echo -e "\n备份目录：/root/.avalanchego\n"
         exit 0
     fi
-    sleep 1
 done
-
-echo "60 秒内未检测到节点启动，请查看日志：journalctl -u avalanchego -f"
+echo "启动超时，请查看日志：journalctl -u avalanchego -f"
